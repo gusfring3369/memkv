@@ -34,8 +34,7 @@ ValueType Database::type(std::string_view key) {
     if (entry == nullptr) {
         return ValueType::kNone;
     }
-    return std::holds_alternative<std::string>(entry->value()) ? ValueType::kString
-                                                               : ValueType::kSortedSet;
+    return type_of(entry->value());
 }
 
 bool Database::expire(std::string_view key, Duration ttl) {

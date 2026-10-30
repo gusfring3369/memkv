@@ -7,38 +7,15 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <variant>
 #include <vector>
 
 #include "memkv/common/clock.hpp"
 #include "memkv/ds/expiry_heap.hpp"
 #include "memkv/ds/intrusive_list.hpp"
-#include "memkv/storage/sorted_set.hpp"
+#include "memkv/storage/entry.hpp"
+#include "memkv/storage/value.hpp"
 
 namespace memkv::storage {
-
-/// The value stored under a key. Supporting a new data type means adding an alternative here.
-using Value = std::variant<std::string, SortedSet>;
-
-/// A key together with its value and optional expiration deadline. Entries are threaded on the
-/// keyspace's LRU list through the embedded ListHook.
-class Entry : public ds::ListHook {
-public:
-    Entry(std::string key, Value value) : key_(std::move(key)), value_(std::move(value)) {}
-
-    [[nodiscard]] const std::string& key() const noexcept { return key_; }
-    [[nodiscard]] Value& value() noexcept { return value_; }
-    [[nodiscard]] const Value& value() const noexcept { return value_; }
-    [[nodiscard]] std::optional<TimePoint> expires_at() const noexcept { return expires_at_; }
-
-private:
-    friend class Keyspace;
-
-    const std::string key_;  // immutable: the keyspace index holds views into it
-    Value value_;
-    std::optional<TimePoint> expires_at_;
-    std::uint64_t expiry_ticket_ = 0;  // identifies this entry's live ExpiryHeap item
-};
 
 struct KeyspaceConfig {
     /// Upper bound on the number of keys; adding a key beyond it evicts the least recently

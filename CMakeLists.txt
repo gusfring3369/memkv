@@ -50,7 +50,15 @@ add_library(memkv_protocol
   src/memkv/protocol/request_parser.cpp)
 target_link_libraries(memkv_protocol PUBLIC memkv_common)
 
-add_library(memkv_command src/memkv/command/dispatcher.cpp)
+add_library(memkv_command
+  src/memkv/command/arguments.cpp
+  src/memkv/command/replies.cpp
+  src/memkv/command/command_registry.cpp
+  src/memkv/command/dispatcher.cpp
+  src/memkv/command/commands/server_commands.cpp
+  src/memkv/command/commands/key_commands.cpp
+  src/memkv/command/commands/string_commands.cpp
+  src/memkv/command/commands/sorted_set_commands.cpp)
 target_link_libraries(memkv_command PUBLIC memkv_storage memkv_protocol)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT MEMKV_FORCE_POLL)
@@ -67,7 +75,7 @@ add_library(memkv_net
 target_link_libraries(memkv_net PUBLIC memkv_command)
 
 # ---- Executables --------------------------------------------------------------------------------
-add_executable(memkv-server apps/memkv_server.cpp)
+add_executable(memkv-server apps/memkv_server.cpp apps/server_options.cpp)
 target_link_libraries(memkv-server PRIVATE memkv_net)
 
 if(MEMKV_BUILD_BENCHMARKS)

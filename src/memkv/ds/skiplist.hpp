@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include "memkv/ds/random.hpp"
+
 namespace memkv::ds {
 
 struct ScoredMember {
@@ -87,7 +89,7 @@ private:
     Node* header_;
     std::size_t level_ = 1;
     std::size_t length_ = 0;
-    std::uint64_t rng_state_;  // splitmix64: 8 bytes of state instead of mt19937's 2.5 KB
+    SplitMix64 random_;  // 8 bytes of state; std::mt19937 would add 2.5 KB to every sorted set
 };
 
 }  // namespace memkv::ds

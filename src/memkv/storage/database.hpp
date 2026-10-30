@@ -5,52 +5,18 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "memkv/common/clock.hpp"
+#include "memkv/storage/database_types.hpp"
+#include "memkv/storage/errors.hpp"
 #include "memkv/storage/keyspace.hpp"
 #include "memkv/storage/sorted_set.hpp"
+#include "memkv/storage/value.hpp"
 
 namespace memkv::storage {
-
-/// Thrown when an operation for one data type targets a key holding another.
-class WrongTypeError : public std::runtime_error {
-public:
-    WrongTypeError()
-        : std::runtime_error("operation against a key holding the wrong kind of value") {}
-};
-
-enum class ValueType { kNone, kString, kSortedSet };
-
-enum class SetCondition {
-    kAlways,
-    kIfAbsent,   // NX
-    kIfPresent,  // XX
-};
-
-struct SetOptions {
-    std::optional<Duration> ttl;
-    SetCondition condition = SetCondition::kAlways;
-};
-
-struct TimeToLive {
-    enum class State { kMissing, kPersistent, kExpiring };
-
-    State state = State::kMissing;
-    Duration remaining{0};  // meaningful only when state == kExpiring
-};
-
-struct DatabaseStats {
-    std::size_t keys = 0;
-    std::size_t keys_with_expiry = 0;
-    std::uint64_t hits = 0;
-    std::uint64_t misses = 0;
-    std::uint64_t expired_keys = 0;
-    std::uint64_t evicted_keys = 0;
-};
 
 /// The storage engine's public API: typed operations over the keyspace.
 ///

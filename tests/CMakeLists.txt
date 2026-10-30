@@ -22,6 +22,7 @@ add_executable(memkv_tests
   database_test.cpp
   request_parser_test.cpp
   reply_test.cpp
+  command_test.cpp
   dispatcher_test.cpp
   server_test.cpp)
 target_link_libraries(memkv_tests PRIVATE memkv_net GTest::gtest_main)

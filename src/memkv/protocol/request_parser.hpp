@@ -53,6 +53,10 @@ private:
         std::size_t length;
     };
 
+    [[nodiscard]] bool inside_multibulk() const noexcept { return expected_args_ > 0; }
+    /// Reads the arguments of the multibulk request that starts at `request_offset`.
+    Result parse_bulk_strings(std::string_view request, std::size_t request_offset,
+                              std::vector<std::string_view>& args);
     void reset() noexcept;
     Result fail(std::string message);
 

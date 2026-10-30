@@ -2,68 +2,11 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cstddef>
-#include <memory>
-#include <new>
 #include <utility>
 
+#include "memkv/ds/skiplist_node.hpp"
+
 namespace memkv::ds {
-
-/// A node and its tower of links live in a single allocation (the layout Redis uses):
-/// [ Node | Level 0 | Level 1 | ... | Level height-1 ]. Separately allocating the links
-/// (e.g. with std::vector) would cost an extra cache miss on every hop of every search.
-struct SkipList::Node {
-    struct Level {
-        Node* forward = nullptr;
-        std::size_t span = 0;  // level-0 nodes skipped by `forward` (distance to the end if null)
-    };
-
-    static Node* create(double score, std::string member, std::size_t height) {
-        static_assert(alignof(Level) <= alignof(Node) && sizeof(Node) % alignof(Level) == 0,
-                      "the level tower must be correctly aligned directly after the node");
-        void* memory = ::operator new(sizeof(Node) + height * sizeof(Level));
-        return ::new (memory) Node(score, std::move(member), height);
-    }
-
-    static void destroy(Node* node) noexcept {
-        node->~Node();
-        ::operator delete(node);
-    }
-
-    Node(const Node&) = delete;
-    Node& operator=(const Node&) = delete;
-
-    [[nodiscard]] Level& level(std::size_t i) noexcept { return tower()[i]; }
-    [[nodiscard]] const Level& level(std::size_t i) const noexcept { return tower()[i]; }
-
-    /// (Re)creates every link of the tower in its empty state.
-    void reset_levels() noexcept { std::uninitialized_value_construct_n(tower_storage(), height); }
-
-    /// Strict (score, member) ordering: does this node sort before the given pair?
-    [[nodiscard]] bool precedes(double s, std::string_view m) const {
-        return score < s || (score == s && member < m);
-    }
-
-    [[nodiscard]] bool matches(double s, std::string_view m) const {
-        return score == s && member == m;
-    }
-
-    std::string member;
-    double score;
-    std::size_t height;
-
-private:
-    Node(double s, std::string m, std::size_t h) : member(std::move(m)), score(s), height(h) {
-        reset_levels();
-    }
-    ~Node() = default;
-
-    [[nodiscard]] Level* tower_storage() noexcept {
-        return reinterpret_cast<Level*>(reinterpret_cast<std::byte*>(this) + sizeof(Node));
-    }
-    [[nodiscard]] Level* tower() noexcept { return std::launder(tower_storage()); }
-    [[nodiscard]] const Level* tower() const noexcept { return const_cast<Node*>(this)->tower(); }
-};
 
 namespace {
 
@@ -78,7 +21,7 @@ bool above_max(double score, ScoreBound max) {
 }  // namespace
 
 SkipList::SkipList(std::uint64_t seed)
-    : header_(Node::create(0.0, std::string(), kMaxLevel)), rng_state_(seed) {}
+    : header_(Node::create(0.0, std::string(), kMaxLevel)), random_(seed) {}
 
 SkipList::~SkipList() {
     destroy();
@@ -88,7 +31,7 @@ SkipList::SkipList(SkipList&& other) noexcept
     : header_(std::exchange(other.header_, nullptr)),
       level_(std::exchange(other.level_, 1)),
       length_(std::exchange(other.length_, 0)),
-      rng_state_(other.rng_state_) {}
+      random_(other.random_) {}
 
 SkipList& SkipList::operator=(SkipList&& other) noexcept {
     if (this != &other) {
@@ -96,7 +39,7 @@ SkipList& SkipList::operator=(SkipList&& other) noexcept {
         header_ = std::exchange(other.header_, nullptr);
         level_ = std::exchange(other.level_, 1);
         length_ = std::exchange(other.length_, 0);
-        rng_state_ = other.rng_state_;
+        random_ = other.random_;
     }
     return *this;
 }
@@ -117,17 +60,13 @@ void SkipList::destroy() noexcept {
 }
 
 std::size_t SkipList::random_level() {
-    // splitmix64 step.
-    std::uint64_t z = (rng_state_ += 0x9E3779B97F4A7C15ULL);
-    z = (z ^ (z >> 30U)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27U)) * 0x94D049BB133111EBULL;
-    z ^= z >> 31U;
-
-    // Each pair of random bits promotes the node with probability 1/4; 64 bits cover 32 levels.
+    // Each pair of random bits promotes the node one level with probability 1/4
+    // (both bits zero). One 64-bit draw covers all 32 levels.
+    std::uint64_t bits = random_.next();
     std::size_t level = 1;
-    while (level < kMaxLevel && (z & 3U) == 0) {
+    while (level < kMaxLevel && (bits & 3U) == 0) {
         ++level;
-        z >>= 2U;
+        bits >>= 2U;
     }
     return level;
 }

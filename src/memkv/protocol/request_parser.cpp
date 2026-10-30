@@ -52,15 +52,11 @@ void split_whitespace(std::string_view line, std::vector<std::string_view>& toke
 
 RequestParser::Result RequestParser::parse(std::string_view input,
                                            std::vector<std::string_view>& args) {
-    // Offset of the current request in `input`; blank lines and empty arrays before it are
-    // skipped and consumed.
-    std::size_t start = 0;
-
-    // Between requests: read either a whole inline command or a multibulk header.
-    while (expected_args_ == 0) {
-        if (start == input.size()) {
-            return {Status::kNeedMoreData, start};
-        }
+    // Step 1, between requests: find where the next request starts. An inline command is
+    // complete as soon as its line is; a multibulk header ("*3") starts a request whose
+    // arguments follow.
+    std::size_t start = 0;  // blank lines and empty arrays before the request are skipped
+    while (!inside_multibulk()) {
         const std::optional<Line> line = find_line(input, start);
         if (!line) {
             if (input.size() - start > limits_.max_inline_length) {
@@ -68,35 +64,37 @@ RequestParser::Result RequestParser::parse(std::string_view input,
             }
             return {Status::kNeedMoreData, start};
         }
-
-        if (!line->text.starts_with('*')) {
-            split_whitespace(line->text, args);
-            if (args.empty()) {
-                start = line->next;  // blank line
-                continue;
+        if (line->text.starts_with('*')) {
+            const std::optional<std::int64_t> count = parse_int(line->text.substr(1));
+            if (!count || *count > static_cast<std::int64_t>(limits_.max_array_length)) {
+                return fail("invalid multibulk length");
             }
-            return {Status::kCommandReady, line->next};
+            if (*count > 0) {
+                expected_args_ = static_cast<std::size_t>(*count);
+                resume_offset_ = line->next - start;
+                break;
+            }
+        } else {
+            split_whitespace(line->text, args);
+            if (!args.empty()) {
+                return {Status::kCommandReady, line->next};
+            }
         }
-
-        const std::optional<std::int64_t> count = parse_int(line->text.substr(1));
-        if (!count || *count > static_cast<std::int64_t>(limits_.max_array_length)) {
-            return fail("invalid multibulk length");
-        }
-        if (*count <= 0) {
-            start = line->next;  // "*0" and "*-1" are empty requests
-            continue;
-        }
-        expected_args_ = static_cast<std::size_t>(*count);
-        resume_offset_ = line->next - start;
+        start = line->next;  // a blank line, "*0" or "*-1": nothing to run
     }
 
-    // Inside a multibulk request: read "$<length>\r\n<bytes>\r\n" elements, resuming where the
-    // previous call stopped.
-    const std::string_view request = input.substr(start);
+    // Step 2: read the multibulk request's arguments.
+    return parse_bulk_strings(input.substr(start), start, args);
+}
+
+RequestParser::Result RequestParser::parse_bulk_strings(std::string_view request,
+                                                        std::size_t request_offset,
+                                                        std::vector<std::string_view>& args) {
+    // Each argument is "$<length>\r\n<bytes>\r\n". Continue where the previous call stopped.
     std::size_t pos = resume_offset_;
-    const auto need_more_data = [&] {
+    const auto wait_for_more_data = [&] {
         resume_offset_ = pos;
-        return Result{Status::kNeedMoreData, start};
+        return Result{Status::kNeedMoreData, request_offset};  // keep the request's bytes
     };
 
     while (spans_.size() < expected_args_) {
@@ -106,7 +104,7 @@ RequestParser::Result RequestParser::parse(std::string_view input,
                 if (request.size() - pos > limits_.max_inline_length) {
                     return fail("bulk header too long");
                 }
-                return need_more_data();
+                return wait_for_more_data();
             }
             if (!header->text.starts_with('$')) {
                 return fail("expected '$' at start of bulk string");
@@ -122,22 +120,23 @@ RequestParser::Result RequestParser::parse(std::string_view input,
 
         const std::size_t length = *bulk_length_;
         if (request.size() - pos < length + 2) {
-            return need_more_data();
+            return wait_for_more_data();
         }
         if (request.substr(pos + length, 2) != "\r\n") {
             return fail("bulk string not terminated by CRLF");
         }
-        spans_.push_back({pos, length});
+        spans_.push_back({.offset = pos, .length = length});
         pos += length + 2;
         bulk_length_.reset();
     }
 
+    // Complete: hand out views into the request, then get ready for the next one.
     args.clear();
     for (const Span& span : spans_) {
         args.push_back(request.substr(span.offset, span.length));
     }
     reset();
-    return {Status::kCommandReady, start + pos};
+    return {Status::kCommandReady, request_offset + pos};
 }
 
 void RequestParser::reset() noexcept {

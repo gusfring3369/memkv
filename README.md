@@ -33,9 +33,33 @@ OK
   works.
 - **Reactor-pattern network layer**: one thread, non-blocking sockets, and a backend-agnostic
   `Poller` (epoll on Linux, poll(2) elsewhere). Commands need no locks and each one is atomic.
-- **Tested**: 72 GoogleTest unit and integration tests, including a differential test of the skip
+- **Tested**: 79 GoogleTest unit and integration tests, including a differential test of the skip
   list against `std::set`. CI runs GCC, Clang, ASan + UBSan, a `redis-cli` smoke test, and a
   clang-format check.
+
+## Reading the code
+
+New to the codebase? [docs/CODE_TOUR.md](docs/CODE_TOUR.md) gives a file-by-file reading order,
+the design principles each part demonstrates, and a short guide to the C++ features used.
+
+## Adding a command
+
+Each command is a small class. For example, this is the whole of `GET`:
+
+```cpp
+class GetCommand final : public Command {
+public:
+    GetCommand() : Command("get", Arity::exactly(1)) {}
+
+    Reply execute(Database& db, const Arguments& args) const override {
+        std::optional<std::string> value = db.get(args.text(0));
+        return value ? Reply::bulk(std::move(*value)) : Reply::null();
+    }
+};
+```
+
+To add a new one, write a class like this in the matching file under
+`src/memkv/command/commands/` and register it there with `registry.add<YourCommand>()`.
 
 ## Quick start
 
@@ -97,7 +121,7 @@ flowchart TD
         server --> conn["Connection: buffers and pipelining"]
     end
     conn --> protocol["protocol: RequestParser and Reply encoder"]
-    conn --> command["command: Dispatcher (lookup, arity, argument parsing)"]
+    conn --> command["command: Dispatcher, CommandRegistry, one class per command"]
     command --> storage
     subgraph storage["storage: the engine, no I/O"]
         db["Database: typed operations, WRONGTYPE"] --> ks["Keyspace: index + LRU + TTL"]
@@ -112,7 +136,7 @@ flowchart TD
 | `ds` | `src/memkv/ds` | Generic data structures. Knows nothing about Redis. |
 | `storage` | `src/memkv/storage` | The engine: keys, values, eviction, expiration, typed operations. Has no sockets and no protocol, so it is unit-testable with an injected clock. |
 | `protocol` | `src/memkv/protocol` | RESP2 request parsing and reply encoding. |
-| `command` | `src/memkv/command` | Maps `argv` to engine calls. Owns all argument validation and the mapping of errors to replies. |
+| `command` | `src/memkv/command` | One class per Redis command (Command design pattern), a registry that finds them by name, and a dispatcher that runs them. Owns all argument validation and the mapping of errors to replies. |
 | `net` | `src/memkv/net` | Sockets, readiness polling, per-client buffers, the event loop, and the periodic cron. |
 
 ### Request lifecycle
@@ -121,8 +145,8 @@ flowchart TD
    client's input buffer.
 2. `RequestParser` extracts every complete request as `string_view` arguments into the buffer.
    Incomplete requests stay buffered, and the parser records how far it got.
-3. `Dispatcher` looks up the command, checks arity, parses numbers and options, and calls
-   `Database`.
+3. `Dispatcher` finds the `Command` object in the `CommandRegistry` and checks its arity. The
+   command's `execute()` validates its arguments through `Arguments` and calls `Database`.
 4. The `Reply` is RESP-encoded into the client's output buffer. Replies to pipelined requests
    queue up in order and go out together, usually in a single `send()`.
 5. If the socket can't take everything, the connection subscribes to writability until its output
@@ -261,13 +285,14 @@ src/memkv/
   ds/        IntrusiveList, SkipList, ExpiryHeap
   storage/   Keyspace, SortedSet, Database (the engine)
   protocol/  RequestParser, Reply / RESP encoder
-  command/   Dispatcher and command table
+  command/   Command base class, Arguments, CommandRegistry, Dispatcher
+    commands/  The commands, one class each: server, key, string, sorted-set
   net/       Socket helpers, Poller (epoll/poll), Connection, Server
 apps/        memkv-server entry point
 bench/       In-process storage benchmark
 tests/       GoogleTest suite
 scripts/     redis-cli smoke test
-docs/        Design notes and trade-offs
+docs/        CODE_TOUR.md (start here), DESIGN.md (trade-offs)
 ```
 
 ## Limitations and possible extensions

@@ -39,6 +39,11 @@ a forbidden include fails to build.
   behind an HTTP or gRPC front end.
 - **Time is injected** through a `Clock` interface. Production uses `steady_clock`, which wall-clock
   changes can't affect. Tests use `ManualClock`, so TTL tests run instantly and deterministically.
+- **Commands are objects.** Each Redis command is a subclass of `Command` that declares its
+  name and `Arity` and implements `execute()` (the Command pattern). A `CommandRegistry` maps
+  names to commands. Adding a command means adding a class, without touching the dispatcher (the
+  open/closed principle), and each command can be read and tested on its own. The cost is one
+  virtual call per request, which is negligible next to a hash lookup.
 - **Errors cross one boundary.** `Dispatcher::dispatch` is the only place that turns exceptions
   into error replies. Argument validation happens before any mutation, so a malformed `ZADD` leaves
   the set untouched.
