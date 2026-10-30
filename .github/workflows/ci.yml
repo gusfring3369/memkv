@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GCC (Release)
+            cxx: g++
+            build_type: Release
+            extra_flags: ""
+          - name: Clang (Release)
+            cxx: clang++
+            build_type: Release
+            extra_flags: ""
+          - name: GCC ASan + UBSan, poll(2) backend
+            cxx: g++
+            build_type: Debug
+            extra_flags: -DMEMKV_SANITIZE=ON -DMEMKV_FORCE_POLL=ON
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install redis-cli
+        run: sudo apt-get update && sudo apt-get install -y redis-tools
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DMEMKV_WERROR=ON
+          ${{ matrix.extra_flags }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit and integration tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: redis-cli compatibility smoke test
+        run: scripts/smoke_test.sh build/memkv-server
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: find src apps tests bench -name '*.cpp' -o -name '*.hpp' | xargs clang-format --dry-run --Werror
